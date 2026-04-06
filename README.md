@@ -17,13 +17,24 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_，将chatlo
 
 - 从本地数据库文件中获取聊天数据
 - 支持 Windows / macOS 系统，兼容微信 3.x / 4.x 版本
+- 支持 macOS 微信 4.x 的 `sns.db` 解密与加载，可查询朋友圈时间线数据
 - 支持获取数据与图片密钥 (Windows < 4.0.3.36 / macOS < 4.0.3.80)
 - 支持图片、语音等多媒体数据解密，支持 wxgf 格式解析
 - 支持自动解密数据库，并提供新消息 Webhook 回调
 - 提供 Terminal UI 界面，同时支持命令行工具和 Docker 镜像部署
-- 提供 HTTP API 服务，可轻松查询聊天记录、联系人、群聊、最近会话等信息
+- 提供 HTTP API 服务，可轻松查询聊天记录、联系人、群聊、最近会话、朋友圈等信息
 - 支持 MCP Streamable HTTP 协议，可与 AI 助手无缝集成
 - 支持多账号管理，可在不同账号间切换
+
+## Fork 说明
+
+本仓库基于 `myysophia/wechat-log` 继续演进，补充了 macOS 场景下的朋友圈能力，当前重点包括：
+
+- 自动识别并加载 `sns.db`
+- 新增 `GET /api/v1/sns` 接口
+- 支持按 `username` 查询朋友圈时间线
+- 支持 `text`、`json`、`csv`、`raw xml` 多种输出格式
+- 支持昵称回退匹配，便于直接按联系人昵称检索
 
 ## Quick Start
 
@@ -50,7 +61,7 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_，将chatlo
 ### 从源码安装
 
 ```bash
-go install github.com/sjzar/chatlog@latest
+go install github.com/jythoner2023/chatlog_with_sns@latest
 ```
 
 > 💡 **提示**: 部分功能有 cgo 依赖，编译前需确认本地有 C 编译环境。
@@ -58,7 +69,7 @@ go install github.com/sjzar/chatlog@latest
 
 ### 下载预编译版本
 
-访问 [Releases](https://github.com/sjzar/chatlog/releases) 页面下载适合您系统的预编译版本。
+访问 [Releases](https://github.com/jythoner2023/chatlog_with_sns/releases) 页面下载适合您系统的预编译版本。
 
 ## 使用指南
 
@@ -242,6 +253,17 @@ GET /api/v1/chatlog?time=2023-01-01&talker=wxid_xxx
 - **联系人列表**：`GET /api/v1/contact`
 - **群聊列表**：`GET /api/v1/chatroom`
 - **会话列表**：`GET /api/v1/session`
+- **朋友圈时间线**：`GET /api/v1/sns?username=HEXIN&format=text`
+
+### 朋友圈接口说明
+
+`GET /api/v1/sns`
+
+参数说明：
+- `username`: 朋友圈发布者标识，支持 `wxid`、微信号，查询不到时会回退匹配昵称
+- `limit`: 返回数量
+- `offset`: 分页偏移量
+- `format`: 输出格式，支持 `text`、`json`、`csv`、`raw`
 
 ### 多媒体内容
 
