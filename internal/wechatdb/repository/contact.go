@@ -9,6 +9,7 @@ import (
 
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/model"
+	"github.com/sjzar/chatlog/pkg/util"
 )
 
 // initContactCache 初始化联系人缓存
@@ -102,40 +103,28 @@ func (r *Repository) GetContact(ctx context.Context, key string) (*model.Contact
 	return contact, nil
 }
 
-func (r *Repository) GetContacts(ctx context.Context, key string, limit, offset int) ([]*model.Contact, error) {
+func (r *Repository) GetContacts(ctx context.Context, key string, tags string, tagMode string, limit, offset int) ([]*model.Contact, error) {
+	_ = ctx
+
 	ret := make([]*model.Contact, 0)
 	if key != "" {
 		ret = r.findContacts(key)
-		if len(ret) == 0 {
-			return []*model.Contact{}, nil
-		}
-		if limit > 0 {
-			end := offset + limit
-			if end > len(ret) {
-				end = len(ret)
-			}
-			if offset >= len(ret) {
-				return []*model.Contact{}, nil
-			}
-			return ret[offset:end], nil
-		}
 	} else {
-		list := r.contactList
-		if limit > 0 {
-			end := offset + limit
-			if end > len(list) {
-				end = len(list)
-			}
-			if offset >= len(list) {
-				return []*model.Contact{}, nil
-			}
-			list = list[offset:end]
-		}
-		for _, name := range list {
+		for _, name := range r.contactList {
 			ret = append(ret, r.contactCache[name])
 		}
 	}
-	return ret, nil
+
+	if len(ret) == 0 {
+		return []*model.Contact{}, nil
+	}
+
+	ret = filterContactsByTags(ret, util.Str2List(tags, ","), tagMode)
+	if len(ret) == 0 {
+		return []*model.Contact{}, nil
+	}
+
+	return paginateContacts(ret, limit, offset), nil
 }
 
 func (r *Repository) findContact(key string) *model.Contact {
@@ -252,4 +241,37 @@ func (r *Repository) getFullContact(userName string) *model.Contact {
 	}
 
 	return nil
+}
+
+func filterContactsByTags(contacts []*model.Contact, tags []string, tagMode string) []*model.Contact {
+	if len(tags) == 0 {
+		return contacts
+	}
+
+	matchAll := model.NormalizeTagMode(tagMode) != "any"
+	filtered := make([]*model.Contact, 0, len(contacts))
+	for _, contact := range contacts {
+		if contact != nil && contact.MatchTags(tags, matchAll) {
+			filtered = append(filtered, contact)
+		}
+	}
+	return filtered
+}
+
+func paginateContacts(contacts []*model.Contact, limit, offset int) []*model.Contact {
+	if offset >= len(contacts) {
+		return []*model.Contact{}
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		return contacts[offset:]
+	}
+
+	end := offset + limit
+	if end > len(contacts) {
+		end = len(contacts)
+	}
+	return contacts[offset:end]
 }

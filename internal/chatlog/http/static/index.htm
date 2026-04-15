@@ -342,6 +342,7 @@
             <button class="tab-btn" onclick="switchTab('session')">最近会话</button>
             <button class="tab-btn" onclick="switchTab('chatroom')">群聊管理</button>
             <button class="tab-btn" onclick="switchTab('contact')">联系人</button>
+            <button class="tab-btn" onclick="switchTab('favorites')">微信收藏</button>
             <button class="tab-btn" onclick="switchTab('sns')">朋友圈检索</button>
             <button class="tab-btn" onclick="switchTab('chatlog')">消息检索</button>
         </div>
@@ -408,6 +409,17 @@
                     <input type="text" id="contact-keyword" placeholder="昵称 / 备注 / wxid">
                 </div>
                 <div class="form-group">
+                    <label>标签筛选 (可选)</label>
+                    <input type="text" id="contact-tags" placeholder="投资人,AI圈">
+                </div>
+                <div class="form-group">
+                    <label>标签匹配模式</label>
+                    <select id="contact-tag-mode">
+                        <option value="all">全部匹配</option>
+                        <option value="any">任一匹配</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label>输出格式</label>
                     <select id="contact-format">
                         <option value="json">JSON (预览)</option>
@@ -447,6 +459,47 @@
                 <button class="btn btn-primary" onclick="queryAPI('sns')">查询 / 导出</button>
             </div>
             <div id="sns-result" class="result-area hidden"></div>
+        </div>
+        <div id="favorites" class="tab-content">
+             <div class="form-grid">
+                <div class="form-group">
+                    <label>收藏类型 (可选)</label>
+                    <select id="favorites-type">
+                        <option value="">默认</option>
+                        <option value="text">文本</option>
+                        <option value="image">图片</option>
+                        <option value="video">视频</option>
+                        <option value="article">文章</option>
+                        <option value="location">位置</option>
+                        <option value="file">文件</option>
+                        <option value="chat">聊天记录</option>
+                        <option value="note">笔记</option>
+                        <option value="card">名片</option>
+                        <option value="finder">视频号</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>关键词 (可选)</label>
+                    <input type="text" id="favorites-keyword" placeholder="搜索收藏 XML 内容中的关键词">
+                </div>
+                <div class="form-group">
+                    <label>限制数量</label>
+                    <input type="number" id="favorites-limit" value="100">
+                </div>
+                <div class="form-group">
+                    <label>输出格式</label>
+                    <select id="favorites-format">
+                        <option value="json">JSON (预览)</option>
+                        <option value="csv">CSV 导出</option>
+                        <option value="text">纯文本</option>
+                        <option value="raw">原始 XML</option>
+                    </select>
+                </div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary" onclick="queryAPI('favorites')">查询 / 导出</button>
+            </div>
+            <div id="favorites-result" class="result-area hidden"></div>
         </div>
         <div id="chatlog" class="tab-content">
              <!-- ... content ... -->
@@ -870,8 +923,20 @@
                     if(kw) params.append('keyword', kw);
                 } else if (type === 'contact') {
                     const kw = document.getElementById('contact-keyword').value;
+                    const tags = document.getElementById('contact-tags').value;
+                    const tagMode = document.getElementById('contact-tag-mode').value;
                     format = document.getElementById('contact-format').value;
                     if(kw) params.append('keyword', kw);
+                    if(tags) params.append('tags', tags);
+                    if(tagMode) params.append('tag_mode', tagMode);
+                } else if (type === 'favorites') {
+                    const favType = document.getElementById('favorites-type').value;
+                    const keyword = document.getElementById('favorites-keyword').value;
+                    const limit = document.getElementById('favorites-limit').value;
+                    format = document.getElementById('favorites-format').value;
+                    if(favType) params.append('type', favType);
+                    if(keyword) params.append('keyword', keyword);
+                    if(limit) params.append('limit', limit);
                 } else if (type === 'sns') {
                     const username = document.getElementById('sns-username').value;
                     const limit = document.getElementById('sns-limit').value;

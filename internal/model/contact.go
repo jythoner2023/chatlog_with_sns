@@ -1,11 +1,13 @@
 package model
 
 type Contact struct {
-	UserName string `json:"userName"`
-	Alias    string `json:"alias"`
-	Remark   string `json:"remark"`
-	NickName string `json:"nickName"`
-	IsFriend bool   `json:"isFriend"`
+	UserName string   `json:"userName"`
+	Alias    string   `json:"alias"`
+	Remark   string   `json:"remark"`
+	NickName string   `json:"nickName"`
+	IsFriend bool     `json:"isFriend"`
+	LabelIDs []int    `json:"labelIds,omitempty"`
+	Labels   []string `json:"labels,omitempty"`
 }
 
 // CREATE TABLE Contact(

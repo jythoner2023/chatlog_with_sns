@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -116,8 +117,10 @@ var GetMediaContentTool = mcp.NewTool(
 
 var ContactTool = mcp.NewTool(
 	"query_contact",
-	mcp.WithDescription(`查询用户的联系人信息。可以通过姓名、备注名或ID进行查询，返回匹配的联系人列表。当用户询问某人的联系方式、想了解联系人信息或需要查找特定联系人时使用此工具。参数为空时，将返回联系人列表`),
+	mcp.WithDescription(`查询用户的联系人信息。可以通过姓名、备注名、ID 或多个标签进行查询，返回匹配的联系人列表。当用户询问某人的联系方式、想了解联系人信息、需要按标签筛选联系人时使用此工具。参数为空时，将返回联系人列表`),
 	mcp.WithString("keyword", mcp.Description("联系人的搜索关键词，可以是姓名、备注名或ID。")),
+	mcp.WithString("tags", mcp.Description("联系人标签，多个标签用英文逗号分隔，例如：投资人,AI圈")),
+	mcp.WithString("tag_mode", mcp.Description("多标签匹配模式：all=同时满足全部标签，any=满足任一标签")),
 )
 
 var ChatRoomTool = mcp.NewTool(
@@ -243,6 +246,8 @@ var CurrentTimeTool = mcp.NewTool(
 
 type ContactRequest struct {
 	Keyword string `json:"keyword"`
+	Tags    string `json:"tags"`
+	TagMode string `json:"tag_mode"`
 	Limit   int    `json:"limit"`
 	Offset  int    `json:"offset"`
 }
@@ -255,16 +260,18 @@ func (s *Service) handleMCPContact(ctx context.Context, request mcp.CallToolRequ
 		return errors.ErrMCPTool(err), nil
 	}
 
-	list, err := s.db.GetContacts(req.Keyword, req.Limit, req.Offset)
+	list, err := s.db.GetContacts(req.Keyword, req.Tags, req.TagMode, req.Limit, req.Offset)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get contacts")
 		return errors.ErrMCPTool(err), nil
 	}
 	buf := &bytes.Buffer{}
-	buf.WriteString("UserName,Alias,Remark,NickName\n")
+	csvWriter := csv.NewWriter(buf)
+	csvWriter.Write([]string{"UserName", "Alias", "Remark", "NickName", "Labels"})
 	for _, contact := range list.Items {
-		buf.WriteString(fmt.Sprintf("%s,%s,%s,%s\n", contact.UserName, contact.Alias, contact.Remark, contact.NickName))
+		csvWriter.Write([]string{contact.UserName, contact.Alias, contact.Remark, contact.NickName, model.ContactLabelsString(contact.Labels)})
 	}
+	csvWriter.Flush()
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			mcp.TextContent{
@@ -894,5 +901,3 @@ func (s *Service) handleMCPRelationshipMilestones(ctx context.Context, request m
 		},
 	), nil
 }
-
-

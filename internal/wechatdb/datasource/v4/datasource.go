@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
-	"github.com/klauspost/compress/zstd"
 
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/model"
@@ -23,12 +23,13 @@ import (
 )
 
 const (
-	Message = "message"
-	Contact = "contact"
-	Session = "session"
-	Media   = "media"
-	Voice   = "voice"
-	SNS     = "sns"
+	Message  = "message"
+	Contact  = "contact"
+	Session  = "session"
+	Media    = "media"
+	Voice    = "voice"
+	SNS      = "sns"
+	Favorite = "favorite"
 )
 
 var Groups = []*dbm.Group{
@@ -60,6 +61,11 @@ var Groups = []*dbm.Group{
 	{
 		Name:      SNS,
 		Pattern:   `^sns\.db(-wal|-shm)?$`,
+		BlackList: []string{},
+	},
+	{
+		Name:      Favorite,
+		Pattern:   `^favorite\.db(-wal|-shm)?$`,
 		BlackList: []string{},
 	},
 }
@@ -432,16 +438,20 @@ func (ds *DataSource) GetMessage(ctx context.Context, talker string, seq int64) 
 func (ds *DataSource) GetContacts(ctx context.Context, key string, limit, offset int) ([]*model.Contact, error) {
 	var query string
 	var args []interface{}
+	labelNames, err := ds.getContactLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if key != "" {
 		// 按照关键字查询
-		query = `SELECT username, local_type, alias, remark, nick_name 
+		query = `SELECT username, local_type, alias, remark, nick_name, extra_buffer
 				FROM contact 
 				WHERE username = ? OR alias = ? OR remark = ? OR nick_name = ?`
 		args = []interface{}{key, key, key, key}
 	} else {
 		// 查询所有联系人
-		query = `SELECT username, local_type, alias, remark, nick_name FROM contact`
+		query = `SELECT username, local_type, alias, remark, nick_name, extra_buffer FROM contact`
 	}
 
 	// 添加排序、分页
@@ -473,16 +483,44 @@ func (ds *DataSource) GetContacts(ctx context.Context, key string, limit, offset
 			&contactV4.Alias,
 			&contactV4.Remark,
 			&contactV4.NickName,
+			&contactV4.ExtraBuffer,
 		)
 
 		if err != nil {
 			return nil, errors.ScanRowFailed(err)
 		}
 
-		contacts = append(contacts, contactV4.Wrap())
+		contacts = append(contacts, contactV4.Wrap(labelNames))
 	}
 
 	return contacts, nil
+}
+
+func (ds *DataSource) getContactLabels(ctx context.Context) (map[int]string, error) {
+	db, err := ds.dbm.GetDB(Contact)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT label_id_, label_name_ FROM contact_label`)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return map[int]string{}, nil
+		}
+		return nil, errors.QueryFailed("SELECT label_id_, label_name_ FROM contact_label", err)
+	}
+	defer rows.Close()
+
+	labels := make(map[int]string)
+	for rows.Next() {
+		var id int
+		var name sql.NullString
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, errors.ScanRowFailed(err)
+		}
+		labels[id] = name.String
+	}
+	return labels, nil
 }
 
 // 群聊
@@ -907,7 +945,7 @@ func (ds *DataSource) GetTableData(group, file, table string, limit, offset int,
 	// 2. Build Query
 	query := fmt.Sprintf("SELECT * FROM \"%s\"", table)
 	var args []interface{}
-	
+
 	if keyword != "" && len(columns) > 0 {
 		var conditions []string
 		for _, col := range columns {
@@ -916,7 +954,7 @@ func (ds *DataSource) GetTableData(group, file, table string, limit, offset int,
 		}
 		query += " WHERE " + strings.Join(conditions, " OR ")
 	}
-	
+
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
 	rows, err := db.Query(query, args...)
@@ -1064,18 +1102,32 @@ func (ds *DataSource) GetSNSTimeline(ctx context.Context, username string, limit
 		return nil, err
 	}
 
+	result, err := ds.querySNSTimeline(ctx, db, username, limit, offset, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// 兼容按昵称检索：先按 user_name 查，查不到时再回退到昵称匹配。
+	if username != "" && len(result) == 0 {
+		return ds.querySNSTimeline(ctx, db, username, limit, offset, true)
+	}
+
+	return result, nil
+}
+
+func (ds *DataSource) querySNSTimeline(ctx context.Context, db *sql.DB, username string, limit, offset int, nicknameFallback bool) ([]map[string]interface{}, error) {
 	var query string
 	var args []interface{}
 
-	if username != "" {
+	if username != "" && !nicknameFallback {
 		query = `SELECT tid, user_name, content, pack_info_buf FROM SnsTimeLine WHERE user_name = ? ORDER BY tid DESC`
 		args = []interface{}{username}
 	} else {
 		query = `SELECT tid, user_name, content, pack_info_buf FROM SnsTimeLine ORDER BY tid DESC`
 	}
 
-	// 添加分页
-	if limit > 0 {
+	// 昵称回退时需要先全量顺序扫描，再在 Go 层做过滤和分页。
+	if limit > 0 && !nicknameFallback {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 		if offset > 0 {
 			query += fmt.Sprintf(" OFFSET %d", offset)
@@ -1089,40 +1141,51 @@ func (ds *DataSource) GetSNSTimeline(ctx context.Context, username string, limit
 	defer rows.Close()
 
 	result := make([]map[string]interface{}, 0)
+	filteredOffset := 0
 	for rows.Next() {
 		var tid int64
 		var userName string
 		var content string
-		var packInfoBuf string
+		var packInfoBuf sql.NullString
 
 		err := rows.Scan(&tid, &userName, &content, &packInfoBuf)
 		if err != nil {
 			return nil, errors.ScanRowFailed(err)
 		}
 
-		// 解析 XML 内容
 		parsedPost, err := model.ParseSNSContent(content)
+		if nicknameFallback && !matchesSNSUsernameFilter(username, userName, parsedPost) {
+			continue
+		}
+		if nicknameFallback && offset > 0 && filteredOffset < offset {
+			filteredOffset++
+			continue
+		}
+		if nicknameFallback && limit > 0 && len(result) >= limit {
+			break
+		}
+
 		if err != nil {
-			// 如果解析失败，返回原始数据
 			result = append(result, map[string]interface{}{
-				"tid":          tid,
-				"user_name":    userName,
-				"content":      content,
-				"pack_info_buf": packInfoBuf,
-				"parse_error":  err.Error(),
+				"tid":           tid,
+				"user_name":     userName,
+				"content":       content,
+				"pack_info_buf": nullStringValue(packInfoBuf),
+				"parse_error":   err.Error(),
 			})
 			continue
 		}
 
-		// 转换为 map[string]interface{}
 		postMap := map[string]interface{}{
-			"tid":            tid,
-			"user_name":      userName,
-			"nickname":       parsedPost.NickName,
-			"create_time":    parsedPost.CreateTime,
+			"tid":             tid,
+			"user_name":       userName,
+			"nickname":        parsedPost.NickName,
+			"create_time":     parsedPost.CreateTime,
 			"create_time_str": parsedPost.CreateTimeStr,
-			"content_desc":   parsedPost.ContentDesc,
-			"content_type":   parsedPost.ContentType,
+			"content_desc":    parsedPost.ContentDesc,
+			"content_type":    parsedPost.ContentType,
+			"xml_content":     content,
+			"pack_info_buf":   nullStringValue(packInfoBuf),
 		}
 
 		if parsedPost.Location != nil {
@@ -1145,6 +1208,13 @@ func (ds *DataSource) GetSNSTimeline(ctx context.Context, username string, limit
 	}
 
 	return result, nil
+}
+
+func matchesSNSUsernameFilter(filter string, userName string, post *model.SNSPost) bool {
+	if strings.EqualFold(userName, filter) {
+		return true
+	}
+	return post != nil && strings.EqualFold(post.NickName, filter)
 }
 
 // GetSNSCount 统计朋友圈数量
@@ -1171,4 +1241,77 @@ func (ds *DataSource) GetSNSCount(ctx context.Context, username string) (int, er
 	}
 
 	return count, nil
+}
+
+func nullStringValue(v sql.NullString) string {
+	if v.Valid {
+		return v.String
+	}
+	return ""
+}
+
+func (ds *DataSource) GetFavorites(ctx context.Context, favType string, keyword string, limit, offset int) ([]*model.FavoriteItem, error) {
+	db, err := ds.dbm.GetDB(Favorite)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `SELECT local_id, type, update_time, content, fromusr, realchatname FROM fav_db_item`
+	whereParts := make([]string, 0)
+	args := make([]interface{}, 0)
+
+	if favType != "" {
+		typeCode, ok := model.FavoriteTypeCode(favType)
+		if !ok {
+			return nil, errors.InvalidArg("type")
+		}
+		whereParts = append(whereParts, "type = ?")
+		args = append(args, typeCode)
+	}
+	if keyword != "" {
+		whereParts = append(whereParts, "content LIKE ?")
+		args = append(args, "%"+keyword+"%")
+	}
+	if len(whereParts) > 0 {
+		query += " WHERE " + strings.Join(whereParts, " AND ")
+	}
+
+	query += " ORDER BY update_time DESC"
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+		if offset > 0 {
+			query += fmt.Sprintf(" OFFSET %d", offset)
+		}
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, errors.QueryFailed(query, err)
+	}
+	defer rows.Close()
+
+	items := make([]*model.FavoriteItem, 0)
+	for rows.Next() {
+		var (
+			localID    int64
+			typeCode   int
+			updateTime int64
+			content    string
+			fromUser   sql.NullString
+			sourceChat sql.NullString
+		)
+
+		if err := rows.Scan(&localID, &typeCode, &updateTime, &content, &fromUser, &sourceChat); err != nil {
+			return nil, errors.ScanRowFailed(err)
+		}
+
+		parsed, parseErr := model.ParseFavoriteContent(content, typeCode)
+		item := model.BuildFavoriteItem(localID, typeCode, updateTime, content, nullStringValue(fromUser), nullStringValue(sourceChat), parsed)
+		if parseErr != nil && item.Summary == "" {
+			item.Summary = model.FavoriteTypeName(typeCode)
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
 }

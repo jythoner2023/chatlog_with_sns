@@ -37,7 +37,7 @@ type Decryptor interface {
 func NewDecryptor(platform string, version int) (Decryptor, error) {
 	// 根据平台返回对应的实现
 	switch {
-	case platform == "windows" && version == 4:
+	case (platform == "windows" || platform == "darwin") && version == 4:
 		return windows.NewV4Decryptor(), nil
 	default:
 		return nil, errors.PlatformUnsupported(platform, version)

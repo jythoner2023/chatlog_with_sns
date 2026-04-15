@@ -96,8 +96,8 @@ func (s *Service) GetMessage(talker string, seq int64) (*model.Message, error) {
 	return s.db.GetMessage(talker, seq)
 }
 
-func (s *Service) GetContacts(key string, limit, offset int) (*wechatdb.GetContactsResp, error) {
-	return s.db.GetContacts(key, limit, offset)
+func (s *Service) GetContacts(key string, tags string, tagMode string, limit, offset int) (*wechatdb.GetContactsResp, error) {
+	return s.db.GetContacts(key, tags, tagMode, limit, offset)
 }
 
 func (s *Service) GetContact(key string) (*model.Contact, error) {
@@ -190,4 +190,11 @@ func (s *Service) GetSNSCount(username string) (int, error) {
 		return 0, nil
 	}
 	return s.db.GetSNSCount(username)
+}
+
+func (s *Service) GetFavorites(favType string, keyword string, limit, offset int) ([]*model.FavoriteItem, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	return s.db.GetFavorites(favType, keyword, limit, offset)
 }

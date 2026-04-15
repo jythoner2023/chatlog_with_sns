@@ -1,3 +1,5 @@
+//go:build windows
+
 package windows
 
 import (
@@ -34,12 +36,12 @@ var (
 
 // DLLExtractor 使用wx_key.dll的密钥提取器
 type DLLExtractor struct {
-	validator *decrypt.Validator
-	mu        sync.Mutex
+	validator   *decrypt.Validator
+	mu          sync.Mutex
 	initialized bool
-	pid        uint32
-	lastKey   string // 记录上次获取的密钥，用于简单去重
-	logger    *util.DLLLogger // DLL日志记录器
+	pid         uint32
+	lastKey     string          // 记录上次获取的密钥，用于简单去重
+	logger      *util.DLLLogger // DLL日志记录器
 }
 
 // init 初始化DLL函数
@@ -109,7 +111,7 @@ func (e *DLLExtractor) Extract(ctx context.Context, proc *model.Process) (string
 		}
 	}
 	e.mu.Unlock() // 初始化完成后解锁，允许并行执行
-	
+
 	// DLL初始化成功，检查是否有回调需要通知
 	if cb, ok := ctx.Value("status_callback").(func(string)); ok {
 		cb("Hook安装成功（已完成DLL注入），如未登录请登录微信；然后打开任意聊天窗口以触发密钥加载...")
@@ -158,7 +160,7 @@ func (e *DLLExtractor) Extract(ctx context.Context, proc *model.Process) (string
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		
+
 		// DLL操作需要持有锁以保护状态
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -168,7 +170,7 @@ func (e *DLLExtractor) Extract(ctx context.Context, proc *model.Process) (string
 		dk, ik, _ := e.pollKeys(ctx, proc.Version, func(d, i string) {
 			updateKeys(d, i, "DLL")
 		})
-		
+
 		// 轮询结束后的最终更新（防止遗漏，虽然回调应该覆盖了大部分情况）
 		if dk != "" || ik != "" {
 			updateKeys(dk, ik, "DLL")

@@ -234,7 +234,7 @@ func (a *Account) GetKey(ctx context.Context) (string, string, error) {
 		// 此时我们不走标准的Extractor (它会走DLL然后等待30秒)，而是直接用原生扫描器
 		if isV4 && !hasImgKey && a.Platform == "windows" {
 			log.Info().Msgf("账号 %s 已有数据库密钥，正在尝试使用内存扫描补全图片密钥...", a.Name)
-			
+
 			// 刷新状态以获取最新的Process对象
 			if err := a.RefreshStatus(); err != nil {
 				log.Warn().Err(err).Msg("刷新进程状态失败，返回现有密钥")
@@ -279,7 +279,7 @@ func (a *Account) GetKey(ctx context.Context) (string, string, error) {
 			if validator != nil {
 				v4.SetValidate(validator)
 			}
-			
+
 			_, imgKey, err := v4.Extract(ctx, process)
 			if err == nil && imgKey != "" {
 				a.ImgKey = imgKey
@@ -287,9 +287,12 @@ func (a *Account) GetKey(ctx context.Context) (string, string, error) {
 			} else {
 				log.Warn().Msg("补全图片密钥失败，仅返回数据库密钥")
 			}
-			
+
 			return a.Key, a.ImgKey, nil
 		}
+
+		log.Info().Msgf("账号 %s 已有数据库密钥，当前平台 %s 暂不支持自动补全图片密钥，将直接使用现有数据库密钥", a.Name, a.Platform)
+		return a.Key, a.ImgKey, nil
 	}
 
 	// 2. 如果没有Data Key -> 走标准流程 (DLL)
@@ -418,13 +421,13 @@ func (a *Account) GetImageKey(ctx context.Context) (string, error) {
 	// 直接调用原生V4扫描器
 	v4 := windows.NewV4Extractor()
 	v4.SetValidate(validator)
-	
+
 	log.Info().Msg("正在启动内存扫描以获取图片密钥...")
 	_, imgKey, err := v4.Extract(ctx, process)
 	if err != nil {
 		return "", err
 	}
-	
+
 	if imgKey != "" {
 		a.ImgKey = imgKey
 		return imgKey, nil

@@ -63,6 +63,7 @@ func (s *Service) initAPIRouter() {
 		api.GET("/contact", s.handleContacts)
 		api.GET("/chatroom", s.handleChatRooms)
 		api.GET("/session", s.handleSessions)
+		api.GET("/favorites", s.handleFavorites)
 		api.GET("/sns", s.handleSNS)
 		api.GET("/db", s.handleGetDBs)
 		api.GET("/db/tables", s.handleGetDBTables)
@@ -149,7 +150,7 @@ func (s *Service) handleChatlog(c *gin.Context) {
 				}
 			}
 		}
-		
+
 		chatLabData := model.ConvertToChatLab(messages, q.Talker, talkerName)
 		c.JSON(http.StatusOK, chatLabData)
 	case "csv":
@@ -227,6 +228,8 @@ func (s *Service) handleContacts(c *gin.Context) {
 
 	q := struct {
 		Keyword string `form:"keyword"`
+		Tags    string `form:"tags"`
+		TagMode string `form:"tag_mode"`
 		Limit   int    `form:"limit"`
 		Offset  int    `form:"offset"`
 		Format  string `form:"format"`
@@ -237,7 +240,7 @@ func (s *Service) handleContacts(c *gin.Context) {
 		return
 	}
 
-	list, err := s.db.GetContacts(q.Keyword, q.Limit, q.Offset)
+	list, err := s.db.GetContacts(q.Keyword, q.Tags, q.TagMode, q.Limit, q.Offset)
 	if err != nil {
 		errors.Err(c, err)
 		return
@@ -260,13 +263,13 @@ func (s *Service) handleContacts(c *gin.Context) {
 			errors.Err(c, err)
 			return
 		}
-		headers := []string{"UserName", "Alias", "Remark", "NickName"}
+		headers := []string{"UserName", "Alias", "Remark", "NickName", "Labels"}
 		for i, header := range headers {
 			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 			f.SetCellValue("Contacts", cell, header)
 		}
 		for i, contact := range list.Items {
-			row := []interface{}{contact.UserName, contact.Alias, contact.Remark, contact.NickName}
+			row := []interface{}{contact.UserName, contact.Alias, contact.Remark, contact.NickName, model.ContactLabelsString(contact.Labels)}
 			for j, val := range row {
 				cell, _ := excelize.CoordinatesToCellName(j+1, i+2)
 				f.SetCellValue("Contacts", cell, val)
@@ -291,10 +294,12 @@ func (s *Service) handleContacts(c *gin.Context) {
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Flush()
 
-		c.Writer.WriteString("UserName,Alias,Remark,NickName\n")
+		csvWriter := csv.NewWriter(c.Writer)
+		csvWriter.Write([]string{"UserName", "Alias", "Remark", "NickName", "Labels"})
 		for _, contact := range list.Items {
-			c.Writer.WriteString(fmt.Sprintf("%s,%s,%s,%s\n", contact.UserName, contact.Alias, contact.Remark, contact.NickName))
+			csvWriter.Write([]string{contact.UserName, contact.Alias, contact.Remark, contact.NickName, model.ContactLabelsString(contact.Labels)})
 		}
+		csvWriter.Flush()
 		c.Writer.Flush()
 	}
 }
@@ -371,6 +376,92 @@ func (s *Service) handleChatRooms(c *gin.Context) {
 			c.Writer.WriteString(fmt.Sprintf("%s,%s,%s,%s,%d\n", chatRoom.Name, chatRoom.Remark, chatRoom.NickName, chatRoom.Owner, len(chatRoom.Users)))
 		}
 		c.Writer.Flush()
+	}
+}
+
+func (s *Service) handleFavorites(c *gin.Context) {
+	q := struct {
+		Type    string `form:"type"`
+		Keyword string `form:"keyword"`
+		Limit   int    `form:"limit"`
+		Offset  int    `form:"offset"`
+		Format  string `form:"format"`
+	}{}
+
+	if err := c.BindQuery(&q); err != nil {
+		errors.Err(c, err)
+		return
+	}
+
+	if q.Limit < 0 {
+		q.Limit = 0
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
+	}
+
+	items, err := s.db.GetFavorites(q.Type, q.Keyword, q.Limit, q.Offset)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+
+	switch strings.ToLower(q.Format) {
+	case "json":
+		c.JSON(http.StatusOK, items)
+	case "csv":
+		c.Writer.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		c.Writer.Header().Set("Content-Disposition", "attachment; filename=favorites.csv")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Flush()
+
+		csvWriter := csv.NewWriter(c.Writer)
+		csvWriter.Write([]string{"ID", "TypeCode", "Type", "UpdateTime", "Summary", "Title", "Description", "Link", "FromUser", "From", "SourceChat", "SourceChatName"})
+		for _, item := range items {
+			csvWriter.Write([]string{
+				fmt.Sprintf("%d", item.ID),
+				fmt.Sprintf("%d", item.TypeCode),
+				item.Type,
+				item.UpdateTimeStr,
+				item.Summary,
+				item.Title,
+				item.Description,
+				item.Link,
+				item.FromUser,
+				item.FromName(),
+				item.SourceChat,
+				item.SourceChatName(),
+			})
+		}
+		csvWriter.Flush()
+	case "raw":
+		c.Writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Flush()
+
+		for _, item := range items {
+			if item.XMLContent == "" {
+				continue
+			}
+			c.Writer.WriteString(item.XMLContent)
+			c.Writer.WriteString("\n")
+			c.Writer.WriteString(strings.Repeat("=", 80))
+			c.Writer.WriteString("\n")
+		}
+	default:
+		c.Writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Flush()
+
+		for _, item := range items {
+			c.Writer.WriteString(item.PlainText())
+			c.Writer.WriteString("\n")
+			c.Writer.WriteString(strings.Repeat("=", 80))
+			c.Writer.WriteString("\n\n")
+		}
 	}
 }
 
@@ -978,7 +1069,7 @@ func (s *Service) handleGetDBTableData(c *gin.Context) {
 		s.exportData(c, data, format, table)
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, data)
 }
 
@@ -1050,16 +1141,16 @@ func (s *Service) exportData(c *gin.Context, data []map[string]interface{}, form
 				log.Error().Err(err).Msg("Failed to close excel file")
 			}
 		}()
-		
+
 		sheet := "Sheet1"
 		index, _ := f.NewSheet(sheet)
-		
+
 		// Write headers
 		for i, h := range headers {
 			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 			f.SetCellValue(sheet, cell, h)
 		}
-		
+
 		// Write data
 		for r, row := range data {
 			for cIdx, h := range headers {
@@ -1068,7 +1159,7 @@ func (s *Service) exportData(c *gin.Context, data []map[string]interface{}, form
 				f.SetCellValue(sheet, cell, val)
 			}
 		}
-		
+
 		f.SetActiveSheet(index)
 		c.Writer.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 		c.Writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.xlsx", filename))
@@ -1263,4 +1354,3 @@ func (s *Service) handleSNSRaw(c *gin.Context, username string, limit, offset in
 		c.Writer.Flush()
 	}
 }
-
